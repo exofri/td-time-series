@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CO2 time series lab — cleaning, smoothing, projection</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  .kpis { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+  .kpi { flex: 1; min-width: 160px; padding: 0.8rem 1rem; border: 1px solid #ccc; border-radius: 8px; }
+  .kpi .value { font-size: 1.5rem; font-weight: bold; color: #0d7c9e; }
+  .kpi .label { font-size: 0.8rem; color: #666; }
+  #honesty { padding: 0.8rem 1rem; border: 2px solid #c46e0a; border-radius: 8px; background: #faf3e8; margin: 1rem 0; }
+  canvas { margin-top: 1.5rem; }
+  #updated { color: #666; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <h1>CO2 time series lab</h1>
+  <p>Real atmospheric CO2 (ppm) for Le Mans, from Open-Meteo's Air Quality API — raw values, a rolling mean, exponential smoothing, and a linear-trend projection, all computed by <code>scripts/analyze_series.py</code> from <code>data/series.csv</code>.</p>
+  <div class="kpis" id="kpis">Loading...</div>
+  <div id="honesty"></div>
+  <canvas id="seriesChart" height="320"></canvas>
+  <p id="updated"></p>
+
+<script>
+fetch('data/series_analysis.json')
+  .then(r => r.json())
+  .then(data => {
+    const raw = data.raw || [];
+    if (raw.length === 0) {
+      document.getElementById('kpis').innerHTML = '<p>No analysis yet -- run "Update analysis" from the Actions tab.</p>';
+      return;
+    }
+    const rollingMean = data.rolling_mean || [];
+    const expSmoothed = data.exp_smoothed || [];
+    const projection = data.projection || [];
+    const gaps = data.gaps || [];
+    const unit = data.unit || '';
+
+    document.getElementById('kpis').innerHTML = `
+      <div class="kpi"><div class="value">${raw.length}</div><div class="label">Observed days</div></div>
+      <div class="kpi"><div class="value">${gaps.length}</div><div class="label">Detected gap(s)</div></div>
+      <div class="kpi"><div class="value">${data.trend_slope_per_day >= 0 ? '+' : ''}${data.trend_slope_per_day} ${unit}</div><div class="label">Trend per day</div></div>
+      <div class="kpi"><div class="value">${raw[raw.length - 1].value} ${unit}</div><div class="label">Most recent reading</div></div>
+    `;
+
+    document.getElementById('honesty').innerHTML = `<strong>Honesty note:</strong> ${data.honest_note}`;
+
+    // One shared x-axis (real calendar dates) covering every day that appears in
+    // ANY series (raw, rolling mean, or projection) -- each dataset is null
+    // outside its own range so Chart.js draws each line only where it actually
+    // has data, rather than a misleading flat line at zero.
+    const byDay = {};
+    raw.forEach(r => { byDay[r.day] = r.date; });
+    projection.forEach(p => { byDay[p.day] = p.date; });
+    const allDayIndices = raw.map(r => r.day).concat(projection.map(p => p.day));
+    const allLabels = allDayIndices.map(d => byDay[d]);
+
+    function seriesFor(points) {
+      const byDayValue = Object.fromEntries(points.map(p => [p.day, p.value]));
+      return allDayIndices.map(d => (d in byDayValue ? byDayValue[d] : null));
+    }
+
+    const datasets = [
+      { label: `Observed (${unit})`, data: seriesFor(raw), borderColor: '#0d7c9e', backgroundColor: 'transparent', pointRadius: 2, borderWidth: 2 },
+      { label: 'Rolling mean (7-day)', data: seriesFor(rollingMean), borderColor: '#2e8b46', backgroundColor: 'transparent', pointRadius: 0, borderWidth: 2 },
+      { label: 'Exponential smoothing', data: seriesFor(expSmoothed), borderColor: '#8b2ea0', backgroundColor: 'transparent', pointRadius: 0, borderWidth: 1, borderDash: [2, 2] },
+      { label: 'Projection (low confidence)', data: seriesFor(projection), borderColor: '#c46e0a', backgroundColor: 'transparent', pointRadius: 3, borderWidth: 2, borderDash: [6, 4] },
+    ];
+
+    new Chart(document.getElementById('seriesChart'), {
+      type: 'line',
+      data: { labels: allLabels, datasets },
+      options: {
+        plugins: {
+          title: { display: true, text: `Real atmospheric CO2 (${unit}), Le Mans — raw → cleaned → smoothed → projected (dashed = beyond observed data)` },
+          tooltip: { mode: 'index', intersect: false },
+        },
+        scales: {
+          x: { title: { display: true, text: 'Date' }, ticks: { maxTicksLimit: 12 } },
+          y: { title: { display: true, text: `CO2 (${unit})` } },
+        },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+      },
+    });
+
+    document.getElementById('updated').textContent =
+      `Data last analyzed ${data.generated_at || '(no timestamp -- see script output)'}` +
+      (gaps.length ? ` -- gap(s) detected: ${gaps.map(g => `${g.start_date} to ${g.end_date}`).join(', ')}` : ' -- no gaps in this pull.');
+  })
+  .catch(err => {
+    document.getElementById('kpis').innerHTML = '<p>Could not load analysis (' + err + ').</p>';
+  });
+</script>
+</body>
+</html>
