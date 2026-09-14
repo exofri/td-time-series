@@ -1,0 +1,28 @@
+name: Update analysis
+
+"on":
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * 1"   # weekly, Monday -- fresh 90-day rolling window each run
+
+permissions:
+  contents: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/fetch_series.py
+      - run: python scripts/analyze_series.py
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/series.csv docs/data/series_analysis.json
+          git commit -m "Update CO2 series [automated]" || echo "Nothing to commit"
+          git push
